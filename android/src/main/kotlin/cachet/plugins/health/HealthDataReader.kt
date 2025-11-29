@@ -376,62 +376,34 @@ class HealthDataReader(
         recordingMethodsToFilter: List<Int> = emptyList(),
         healthConnectData: MutableList<Map<String, Any?>>
     ) {
-        val filteredRecords = if (recordingMethodsToFilter.isEmpty()) {
-            records
-        } else {
-            recordingFilter.filterRecordsByRecordingMethods(
-                recordingMethodsToFilter,
-                records
-            )
-        }
+        // For workouts, use Aggregate API scoped to the session's data origin
+        // to avoid double counting across multiple data sources and overlapping data.
+        // We intentionally do not apply per-record recording method filters here because
+        // aggregation already deduplicates across origins and segments.
+        val sessionRecords = records
 
-        for (rec in filteredRecords) {
+        for (rec in sessionRecords) {
             val record = rec as ExerciseSessionRecord
-            
-            // Get distance data
-            val distanceRequest = healthConnectClient.readRecords(
-                ReadRecordsRequest(
-                    recordType = DistanceRecord::class,
+            // Aggregate associated metrics with deduplication and constrain to the
+            // session's data origin to prevent cross-origin double counting.
+            val aggregateResponse = healthConnectClient.aggregate(
+                AggregateRequest(
+                    metrics = setOf(
+                        DistanceRecord.DISTANCE_TOTAL,
+                        ActiveCaloriesBurnedRecord.ENERGY_TOTAL,
+                        StepsRecord.COUNT_TOTAL,
+                    ),
                     timeRangeFilter = TimeRangeFilter.between(
                         record.startTime,
                         record.endTime,
                     ),
+                    dataOriginFilter = setOf(record.metadata.dataOrigin),
                 ),
             )
-            var totalDistance = 0.0
-            for (distanceRec in distanceRequest.records) {
-                totalDistance += distanceRec.distance.inMeters
-            }
 
-            // Get energy burned data
-            val energyBurnedRequest = healthConnectClient.readRecords(
-                ReadRecordsRequest(
-                    recordType = TotalCaloriesBurnedRecord::class,
-                    timeRangeFilter = TimeRangeFilter.between(
-                        record.startTime,
-                        record.endTime,
-                    ),
-                ),
-            )
-            var totalEnergyBurned = 0.0
-            for (energyBurnedRec in energyBurnedRequest.records) {
-                totalEnergyBurned += energyBurnedRec.energy.inKilocalories
-            }
-
-            // Get steps data
-            val stepRequest = healthConnectClient.readRecords(
-                ReadRecordsRequest(
-                    recordType = StepsRecord::class,
-                    timeRangeFilter = TimeRangeFilter.between(
-                        record.startTime,
-                        record.endTime
-                    ),
-                ),
-            )
-            var totalSteps = 0.0
-            for (stepRec in stepRequest.records) {
-                totalSteps += stepRec.count
-            }
+            val totalDistance = aggregateResponse[DistanceRecord.DISTANCE_TOTAL]?.inMeters ?: 0.0
+            val totalActiveKcal = aggregateResponse[ActiveCaloriesBurnedRecord.ENERGY_TOTAL]?.inKilocalories ?: 0.0
+            val totalSteps: Long = aggregateResponse[StepsRecord.COUNT_TOTAL] ?: 0L
 
             // Add final datapoint
             healthConnectData.add(
@@ -444,14 +416,17 @@ class HealthDataReader(
                                 .firstOrNull() ?: "OTHER"),
                     "totalDistance" to if (totalDistance == 0.0) null else totalDistance,
                     "totalDistanceUnit" to "METER",
-                    "totalEnergyBurned" to if (totalEnergyBurned == 0.0) null else totalEnergyBurned,
+                    // Use active calories only to avoid basal energy double counting
+                    "totalEnergyBurned" to if (totalActiveKcal == 0.0) null else totalActiveKcal,
                     "totalEnergyBurnedUnit" to "KILOCALORIE",
-                    "totalSteps" to if (totalSteps == 0.0) null else totalSteps,
+                    // Steps are counts; use Long to avoid precision issues
+                    "totalSteps" to if (totalSteps == 0L) null else totalSteps,
                     "totalStepsUnit" to "COUNT",
                     "unit" to "MINUTES",
                     "date_from" to record.startTime.toEpochMilli(),
                     "date_to" to record.endTime.toEpochMilli(),
-                    "source_id" to "",
+                    // Expose data origin for transparency/debugging
+                    "source_id" to record.metadata.dataOrigin.packageName,
                     "source_name" to record.metadata.dataOrigin.packageName,
                 ),
             )
