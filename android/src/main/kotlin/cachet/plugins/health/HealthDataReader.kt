@@ -390,7 +390,7 @@ class HealthDataReader(
                 AggregateRequest(
                     metrics = setOf(
                         DistanceRecord.DISTANCE_TOTAL,
-                        ActiveCaloriesBurnedRecord.ENERGY_TOTAL,
+                        ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL,
                         StepsRecord.COUNT_TOTAL,
                     ),
                     timeRangeFilter = TimeRangeFilter.between(
@@ -402,7 +402,7 @@ class HealthDataReader(
             )
 
             val totalDistance = aggregateResponse[DistanceRecord.DISTANCE_TOTAL]?.inMeters ?: 0.0
-            val totalActiveKcal = aggregateResponse[ActiveCaloriesBurnedRecord.ENERGY_TOTAL]?.inKilocalories ?: 0.0
+            val totalActiveKcal = aggregateResponse[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]?.inKilocalories ?: 0.0
             val totalSteps: Long = aggregateResponse[StepsRecord.COUNT_TOTAL] ?: 0L
 
             // Add final datapoint
